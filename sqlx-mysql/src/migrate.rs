@@ -158,12 +158,16 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
             let lock_id = generate_lock_id(&database_name);
 
             // language=MySQL
-            let _ = query("SELECT RELEASE_LOCK(?)")
+            let release_lock: Option<(i64,)> = query_as("SELECT RELEASE_LOCK(?)")
                 .bind(lock_id)
-                .execute(self)
+                .fetch_optional(self)
                 .await?;
 
-            Ok(())
+            match release_lock {
+                Some((0,)) => Err(MigrateError::LockNotHeld),
+                Some((_,)) => Ok(()),
+                None => Err(MigrateError::LockDoesNotExist),
+            }
         })
     }
 
