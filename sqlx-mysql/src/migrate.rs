@@ -11,6 +11,7 @@ use crate::executor::Executor;
 use crate::query::query;
 use crate::query_as::query_as;
 use crate::query_scalar::query_scalar;
+use crate::row::Row;
 use crate::{MySql, MySqlConnectOptions, MySqlConnection};
 
 fn parse_for_maintenance(url: &str) -> Result<(MySqlConnectOptions, String), Error> {
@@ -136,6 +137,14 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
             let database_name = current_database(self).await?;
             let lock_id = generate_lock_id(&database_name);
 
+            let proxysql_connection_id = query_proxysql_connection_id(self).await?;
+            let underlying_connection_id = query_underlying_connection_id(self).await?;
+            ::tracing::info!(
+                proxysql_connection_id,
+                underlying_connection_id,
+                "before lock"
+            );
+
             // create an application lock over the database
             // this function will not return until the lock is acquired
 
@@ -145,8 +154,16 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
             // language=MySQL
             let _ = query("SELECT GET_LOCK(?, -1)")
                 .bind(lock_id)
-                .execute(self)
+                .execute::<&mut Self>(self)
                 .await?;
+
+            let proxysql_connection_id = query_proxysql_connection_id(self).await?;
+            let underlying_connection_id = query_underlying_connection_id(self).await?;
+            ::tracing::info!(
+                proxysql_connection_id,
+                underlying_connection_id,
+                "after lock"
+            );
 
             Ok(())
         })
@@ -156,6 +173,14 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
         Box::pin(async move {
             let database_name = current_database(self).await?;
             let lock_id = generate_lock_id(&database_name);
+
+            let proxysql_connection_id = query_proxysql_connection_id(self).await?;
+            let underlying_connection_id = query_underlying_connection_id(self).await?;
+            ::tracing::info!(
+                proxysql_connection_id,
+                underlying_connection_id,
+                "before unlock"
+            );
 
             // language=MySQL
             let release_lock: Option<i64> = query_scalar("SELECT RELEASE_LOCK(?)")
@@ -299,4 +324,20 @@ fn generate_lock_id(database_name: &str) -> String {
         "{:x}",
         0x3d32ad9e * (CRC_IEEE.checksum(database_name.as_bytes()) as i64)
     )
+}
+
+async fn query_proxysql_connection_id(conn: &mut MySqlConnection) -> Result<u64, MigrateError> {
+    ::tracing::info!("querying proxysql connection id");
+    Ok(conn
+        .fetch_one("SELECT CONNECTION_ID()")
+        .await
+        .and_then(|row| row.try_get::<u64, _>(0))?)
+}
+
+async fn query_underlying_connection_id(conn: &mut MySqlConnection) -> Result<u64, MigrateError> {
+    ::tracing::info!("querying underlying connection id");
+    Ok(conn
+        .fetch_one("SELECT  CONNECTION_ID()")
+        .await
+        .and_then(|row| row.try_get::<u64, _>(0))?)
 }
