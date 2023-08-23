@@ -152,9 +152,8 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
             // https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS-TABLE
 
             // language=MySQL
-            let _ = query("SELECT GET_LOCK(?, -1)")
-                .bind(lock_id)
-                .execute::<&mut Self>(self)
+            let _ = self
+                .execute(format!("SELECT GET_LOCK('{lock_id}', -1)").as_str())
                 .await?;
 
             let proxysql_connection_id = query_proxysql_connection_id(self).await?;
@@ -183,10 +182,10 @@ CREATE TABLE IF NOT EXISTS _sqlx_migrations (
             );
 
             // language=MySQL
-            let release_lock: Option<i64> = query_scalar("SELECT RELEASE_LOCK(?)")
-                .bind(lock_id)
-                .fetch_one(self)
-                .await?;
+            let release_lock = self
+                .fetch_one(format!("SELECT RELEASE_LOCK('{lock_id}')").as_str())
+                .await
+                .and_then(|row| row.try_get::<Option<i32>, _>(0))?;
 
             match release_lock {
                 Some(0) => Err(MigrateError::LockNotHeld),
